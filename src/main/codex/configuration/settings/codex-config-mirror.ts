@@ -100,7 +100,8 @@ function mirrorSystemConfigIntoManagedCodexHome(homes: CodexSettingsPromotionHom
     // Missing marketplace/plugin tables in later source configs now count as removals.
     mirroredRegistrations: true,
     mirroredMcpServers: mirrorResult.mirroredMcpServerNames,
-    mirroredMcpServerRoot: mirrorResult.mirroredMcpServerRoot
+    mirroredMcpServerRoot: mirrorResult.mirroredMcpServerRoot,
+    publishedConfig: mirrorResult.publishedConfig
   })
   return { ran: true, complete }
 }
@@ -166,6 +167,7 @@ type CodexConfigMirrorResult =
       preservedConflictKeys: ReadonlySet<string>
       mirroredMcpServerNames: ReadonlySet<string>
       mirroredMcpServerRoot: boolean
+      publishedConfig?: string
     }
 
 function syncSystemConfigIntoManagedCodexHomeUnsafe(
@@ -185,6 +187,14 @@ function syncSystemConfigIntoManagedCodexHomeUnsafe(
     return { status: 'refused-indeterminate', error: runtimeConfigObservation.error }
   }
   const runtimeConfigExists = runtimeConfigObservation.kind === 'present'
+  const observedRuntimeConfig = runtimeConfigExists ? runtimeConfigObservation.value : null
+  // A save since promotion read the file was never checked for user edits; the next pass will.
+  if (
+    promotionPlan.observedRuntimeConfig !== undefined &&
+    promotionPlan.observedRuntimeConfig !== observedRuntimeConfig
+  ) {
+    return { status: 'superseded' }
+  }
   const rawSystemConfig =
     systemConfigObservation.kind === 'present' ? systemConfigObservation.value : ''
   // Missing/blank cloud-synced configs may be unhydrated; preserve existing runtime settings.
@@ -225,7 +235,8 @@ function syncSystemConfigIntoManagedCodexHomeUnsafe(
       status: 'mirrored',
       preservedConflictKeys: new Set(),
       mirroredMcpServerNames: ownership.names,
-      mirroredMcpServerRoot: ownership.ownsRoot
+      mirroredMcpServerRoot: ownership.ownsRoot,
+      publishedConfig: freshRuntimeConfig
     }
   }
 
@@ -272,6 +283,7 @@ function syncSystemConfigIntoManagedCodexHomeUnsafe(
     status: 'mirrored',
     preservedConflictKeys: preserved.keys,
     mirroredMcpServerNames,
-    mirroredMcpServerRoot
+    mirroredMcpServerRoot,
+    publishedConfig: nextRuntimeConfig
   }
 }

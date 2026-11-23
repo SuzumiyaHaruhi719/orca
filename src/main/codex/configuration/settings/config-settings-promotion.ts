@@ -24,12 +24,15 @@ import { resolveUntrackedCodexSetting } from './config-settings-conflict-resolut
 import { extractOrdinaryCodexSettings } from '../toml/config-toml-runtime-owned-sections'
 import {
   applyCodexRegistrationPromotions,
-  hasCodexRegistrationUserEdits,
   planCodexRegistrationPromotion,
-  readCodexRegistrationBaseline,
-  type CodexRegistrationBaseline
+  readCodexRegistrationBaseline
 } from './config-plugin-registration-promotion'
 import { hasCodexRegistrationEntries } from '../toml/config-toml-plugin-registration-tables'
+import {
+  forkOnUserEdits,
+  getComparableRaw,
+  hasTrackedSettingEdits
+} from './config-settings-wsl-fork'
 
 export type CodexSettingsBaselineSnapshotOptions = {
   conflicts?: ReadonlyMap<string, CodexSettingsConflict>
@@ -38,6 +41,8 @@ export type CodexSettingsBaselineSnapshotOptions = {
   /** Names copied from the canonical source in this mirror pass. */
   mirroredMcpServers?: ReadonlySet<string>
   mirroredMcpServerRoot?: boolean
+  /** What this pass published; a save since then must stay promotable, so no snapshot is taken. */
+  publishedConfig?: string
 }
 
 /** Snapshot only after a successful mirror so pending runtime changes remain promotable. */
@@ -53,6 +58,9 @@ export function snapshotCodexRuntimeSettingsBaseline(
       throw observation.error
     }
     const runtimeConfig = observation.kind === 'present' ? observation.value : ''
+    if (options.publishedConfig !== undefined && runtimeConfig !== options.publishedConfig) {
+      return false
+    }
     const conflicts = options.conflicts ?? new Map<string, CodexSettingsConflict>()
     const runtimeValues = readPromotedSettingValuesFromContent(runtimeConfig)
     const settings = new Map<string, string | null>()
@@ -94,6 +102,8 @@ export type CodexSettingsPromotionPlan = {
   mirroredMcpServerRoot: boolean
   /** The managed copy holds user edits Orca may not write back, so the mirror leaves them alone. */
   forked?: boolean
+  /** The managed config this plan was computed from; the mirror defers if it changed since. */
+  observedRuntimeConfig?: string | null
 }
 
 function getHostPromotionHomes(): CodexSettingsPromotionHomes {
@@ -142,7 +152,7 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
     runtimeTomlObservation = observeAgentStateFile(runtimeTomlPath)
   }
   if (runtimeTomlObservation.kind === 'absent') {
-    return emptyPromotionPlan()
+    return { ...emptyPromotionPlan(), observedRuntimeConfig: null }
   }
   if (runtimeTomlObservation.kind === 'indeterminate') {
     // Throw to stall the mirror rather than overwrite unreadable runtime changes.
@@ -158,14 +168,19 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
   if (baseline?.forked) {
     return { ...emptyPromotionPlan(), forked: true }
   }
-  const mirroredMcpServers = baseline?.mcpServers ?? new Set<string>()
-  const mirroredMcpServerRoot = baseline?.mcpServerRoot ?? false
+  const unchangedPlan = (): CodexSettingsPromotionPlan => ({
+    conflicts,
+    runtimeValuesToPreserve,
+    mirroredMcpServers: baseline?.mcpServers ?? new Set<string>(),
+    mirroredMcpServerRoot: baseline?.mcpServerRoot ?? false,
+    observedRuntimeConfig: runtimeTomlObservation.value
+  })
   const updates = new Map<string, string>()
   const conflicts = new Map<string, CodexSettingsConflict>()
   const runtimeValuesToPreserve = new Map<string, string | null>()
   let settingsEdited = false
   if (baseline) {
-    const runtimeValues = readPromotedSettingValues(runtimeTomlPath)
+    const runtimeValues = readPromotedSettingValuesFromContent(runtimeTomlObservation.value)
     collectPromotionChanges({
       baseline,
       runtimeValues,
@@ -176,29 +191,27 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
     })
     settingsEdited = updates.size > 0 || hasTrackedSettingEdits(baseline, runtimeValues)
   }
-  // Registrations can promote before the first mirror because untracked tables are additions.
-  if (!settingsEdited && !hasCodexRegistrationEntries(runtimeTomlObservation.value)) {
-    return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
-  }
-  // Orca never writes a WSL guest's own config, including through a host dotfile link into one.
-  const guestSystemConfig = parseWslUncPath(systemTomlPath) !== null
-  if (!guestSystemConfig) {
-    // A new home may later hold auth.json, so create it owner-only.
-    mkdirSync(systemHomePath, { recursive: true, mode: 0o700 })
+  // Registrations can promote before the first mirror because untracked tables are additions;
+  // a removed last registration still needs the guest check below.
+  if (
+    !settingsEdited &&
+    !hasCodexRegistrationEntries(runtimeTomlObservation.value) &&
+    (baseline?.registrations.size ?? 0) === 0
+  ) {
+    return unchangedPlan()
   }
   const writeTarget = resolvePromotionWriteTarget(systemTomlPath)
-  if (guestSystemConfig || parseWslUncPath(writeTarget.path) !== null) {
+  // Orca never writes a WSL guest's own config, including through a host dotfile link into one.
+  if (parseWslUncPath(systemTomlPath) !== null || parseWslUncPath(writeTarget.path) !== null) {
     return forkOnUserEdits({
       runtimeHomePath,
       runtimeConfig: runtimeTomlObservation.value,
       guestConfigPath: writeTarget.path,
       settingsEdited,
-      registrations: baseline?.registrations ?? new Map(),
-      plan: { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
+      baseline,
+      plan: unchangedPlan()
     })
   }
-  // Dangling dotfile links may target a parent directory that does not exist yet.
-  mkdirSync(dirname(writeTarget.path), { recursive: true, mode: 0o700 })
   // Read the target before reconstructing it; registration promotion can run without a baseline.
   const writeTargetObservation = observeAgentStateFile(writeTarget.path)
   if (writeTargetObservation.kind === 'indeterminate') {
@@ -221,8 +234,12 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
     )
   )
   if (nextContent === systemContent) {
-    return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
+    return unchangedPlan()
   }
+  // A new home may later hold auth.json, so create it owner-only.
+  mkdirSync(systemHomePath, { recursive: true, mode: 0o700 })
+  // Dangling dotfile links may target a parent directory that does not exist yet.
+  mkdirSync(dirname(writeTarget.path), { recursive: true, mode: 0o700 })
   const computedFrom = targetExists ? writeTargetObservation.value : null
   // Promotion never rotated the user's config.toml.bak; keep it that way.
   if (
@@ -233,56 +250,7 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
   ) {
     return null
   }
-  return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
-}
-
-type GuestForkCheck = {
-  runtimeHomePath: string
-  runtimeConfig: string
-  guestConfigPath: string
-  settingsEdited: boolean
-  registrations: CodexRegistrationBaseline
-  plan: CodexSettingsPromotionPlan
-}
-
-/** Orca can't write a WSL guest's config back, so a user edit makes the managed copy the user's own. */
-function forkOnUserEdits(check: GuestForkCheck): CodexSettingsPromotionPlan {
-  if (!check.settingsEdited) {
-    const guest = observeAgentStateFile(check.guestConfigPath)
-    if (guest.kind === 'indeterminate') {
-      throw guest.error
-    }
-    const guestConfig = guest.kind === 'present' ? guest.value : ''
-    if (!hasCodexRegistrationUserEdits(check.runtimeConfig, guestConfig, check.registrations)) {
-      return check.plan
-    }
-  }
-  writeCodexSettingsBaseline(check.runtimeHomePath, {
-    settings: new Map(),
-    conflicts: new Map(),
-    registrations: new Map(),
-    mcpServers: new Set(),
-    mcpServerRoot: false,
-    forked: true
-  })
-  return { ...emptyPromotionPlan(), forked: true }
-}
-
-/** Any change to a mirrored value, deletions included, even where a later source edit would win. */
-function hasTrackedSettingEdits(
-  baseline: CodexSettingsBaseline,
-  runtimeValues: ReadonlyMap<string, TopLevelSettingValue>
-): boolean {
-  for (const [key, mirroredRaw] of baseline.settings) {
-    if (baseline.conflicts.has(key)) {
-      continue
-    }
-    const runtimeRaw = getComparableRaw(runtimeValues.get(key))
-    if (runtimeRaw !== undefined && runtimeRaw !== mirroredRaw) {
-      return true
-    }
-  }
-  return false
+  return unchangedPlan()
 }
 
 type PromotionCollectionContext = {
@@ -324,13 +292,6 @@ function collectPromotionChanges(context: PromotionCollectionContext): void {
     }
     context.updates.set(key, runtimeRaw)
   }
-}
-
-function getComparableRaw(value: TopLevelSettingValue | undefined): string | null | undefined {
-  if (!value) {
-    return null
-  }
-  return value.multiline ? undefined : value.raw
 }
 
 function emptyPromotionPlan(): CodexSettingsPromotionPlan {

@@ -101,6 +101,7 @@ export function applySystemProjectRevocations(runtimeConfig: string, systemConfi
     return runtimeConfig
   }
   const lines = runtimeConfig.split('\n')
+  const inserted = new Set<string>()
   // Bottom-up so earlier section start lines stay valid after each splice.
   for (const section of getTomlSections(runtimeConfig).toReversed()) {
     const revocation = revocations.get(getRevocationTomlSectionHeaderKey(section))
@@ -112,7 +113,11 @@ export function applySystemProjectRevocations(runtimeConfig: string, systemConfi
     ) {
       continue
     }
-    lines.splice(section.start, section.block.split('\n').length, ...revocation.split('\n'))
+    const revocationKey = getRevocationTomlSectionHeaderKey(section)
+    // Case-drifted spellings share one revocation; a second copy would define the table twice.
+    const replacement = inserted.has(revocationKey) ? [] : revocation.split('\n')
+    inserted.add(revocationKey)
+    lines.splice(section.start, section.block.split('\n').length, ...replacement)
   }
   return lines.join('\n')
 }
