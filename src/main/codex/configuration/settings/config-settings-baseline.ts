@@ -22,6 +22,8 @@ export type CodexSettingsBaseline = {
   mcpServerRoot: boolean
   /** The managed config holds user edits that cannot be written back, so the mirror leaves it alone. */
   forked?: boolean
+  /** Full text of promoted values that were multiline when mirrored; `settings` tracks single lines only. */
+  multilineSettings?: ReadonlyMap<string, string>
 }
 
 type StoredSettingsBaseline = {
@@ -32,6 +34,7 @@ type StoredSettingsBaseline = {
   mcpServers?: string[]
   mcpServerRoot?: boolean
   forked?: boolean
+  multilineSettings?: Record<string, string>
 }
 
 /** Unreadable baselines stall the mirror; absent or invalid baselines can be rebuilt. */
@@ -87,7 +90,12 @@ function readParsedCodexSettingsBaseline(
       mcpServers: readStoredMcpServers(parsed.mcpServers),
       // Older mirrors owned the whole MCP root; retain that removal policy for one pass.
       mcpServerRoot: parsed.mcpServers === undefined || parsed.mcpServerRoot === true,
-      forked: parsed.forked === true
+      forked: parsed.forked === true,
+      multilineSettings: new Map(
+        Object.entries(parsed.multilineSettings ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string'
+        )
+      )
     }
   } catch (error) {
     return isDefinitiveAbsence(error) || isRebuildableBaselineError(error) ? null : 'unreadable'
@@ -149,6 +157,9 @@ export function writeCodexSettingsBaseline(
   }
   if (baseline.forked) {
     file.forked = true
+  }
+  if (baseline.multilineSettings && baseline.multilineSettings.size > 0) {
+    file.multilineSettings = Object.fromEntries(baseline.multilineSettings)
   }
   const baselinePath = getCodexSettingsBaselinePath(runtimeHomePath)
   const serialized = `${JSON.stringify(file, null, 2)}\n`

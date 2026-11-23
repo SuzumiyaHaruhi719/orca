@@ -33,6 +33,7 @@ export function forkOnUserEdits(check: GuestForkCheck): CodexSettingsPromotionPl
     registrations: check.baseline?.registrations ?? new Map(),
     mcpServers: check.baseline?.mcpServers ?? new Set(),
     mcpServerRoot: check.baseline?.mcpServerRoot ?? false,
+    multilineSettings: check.baseline?.multilineSettings,
     forked: true
   })
   return { ...check.plan, conflicts: new Map(), runtimeValuesToPreserve: new Map(), forked: true }
@@ -41,14 +42,17 @@ export function forkOnUserEdits(check: GuestForkCheck): CodexSettingsPromotionPl
 /** Any change to a mirrored value, deletions included, even where a later source edit would win. */
 export function hasTrackedSettingEdits(
   baseline: CodexSettingsBaseline,
-  runtimeValues: ReadonlyMap<string, TopLevelSettingValue>
+  runtimeValues: ReadonlyMap<string, TopLevelSettingValue>,
+  runtimeMultilineTexts: ReadonlyMap<string, string>
 ): boolean {
   for (const [key, mirroredRaw] of baseline.settings) {
-    if (baseline.conflicts.has(key)) {
-      continue
+    // The baseline's single-line values never match a multiline one, so that is an edit too.
+    if (!baseline.conflicts.has(key) && getComparableRaw(runtimeValues.get(key)) !== mirroredRaw) {
+      return true
     }
-    // The baseline only tracks single-line values, so a multiline one is always an edit.
-    if (getComparableRaw(runtimeValues.get(key)) !== mirroredRaw) {
+  }
+  for (const [key, mirroredText] of baseline.multilineSettings ?? []) {
+    if (!baseline.conflicts.has(key) && runtimeMultilineTexts.get(key) !== mirroredText) {
       return true
     }
   }

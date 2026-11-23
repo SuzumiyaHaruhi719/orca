@@ -141,6 +141,21 @@ describe('managed Codex config for a WSL guest config', () => {
     expect(readRuntimeConfig()).toContain('model = "o4"')
   })
 
+  it('keeps a managed edit of a value the distro wrote across several lines', () => {
+    writeSystemConfig('model = "gpt-5"\n\n[tui]\nstatus_line = [\n  "model",\n]\n')
+    forkTestState.wslPath = systemConfigPath()
+    syncSystemConfigIntoManagedCodexHome()
+    writeFileSync(
+      runtimeConfigPath(),
+      readRuntimeConfig().replace(/status_line = \[[^\]]*\]/, 'status_line = ["cwd"]'),
+      'utf-8'
+    )
+
+    syncSystemConfigIntoManagedCodexHome()
+
+    expect(readRuntimeConfig()).toContain('status_line = ["cwd"]')
+  })
+
   it('still applies a distro project revocation to an edited managed copy', () => {
     const trusted = '[projects."/home/u/repo"]\ntrust_level = "trusted"\n'
     writeSystemConfig(`model = "gpt-5"\n\n${trusted}`)

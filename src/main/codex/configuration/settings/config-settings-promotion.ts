@@ -12,6 +12,7 @@ import {
   PROMOTED_STRUCTURED_KEYS,
   readPromotedSettingValues,
   readPromotedSettingValuesFromContent,
+  readMultilinePromotedSettingTexts,
   type TopLevelSettingValue
 } from '../toml/config-toml-promoted-setting-values'
 import {
@@ -41,7 +42,7 @@ export type CodexSettingsBaselineSnapshotOptions = {
   /** Names copied from the canonical source in this mirror pass. */
   mirroredMcpServers?: ReadonlySet<string>
   mirroredMcpServerRoot?: boolean
-  /** What this pass published; a save since then must stay promotable, so no snapshot is taken. */
+  /** What this pass published: the baseline describes it, so a save since then reads as an edit. */
   publishedConfig?: string
 }
 
@@ -57,10 +58,8 @@ export function snapshotCodexRuntimeSettingsBaseline(
     if (observation.kind === 'indeterminate') {
       throw observation.error
     }
-    const runtimeConfig = observation.kind === 'present' ? observation.value : ''
-    if (options.publishedConfig !== undefined && runtimeConfig !== options.publishedConfig) {
-      return false
-    }
+    const runtimeConfig =
+      options.publishedConfig ?? (observation.kind === 'present' ? observation.value : '')
     const conflicts = options.conflicts ?? new Map<string, CodexSettingsConflict>()
     const runtimeValues = readPromotedSettingValuesFromContent(runtimeConfig)
     const settings = new Map<string, string | null>()
@@ -78,7 +77,8 @@ export function snapshotCodexRuntimeSettingsBaseline(
         ? readCodexRegistrationBaseline(runtimeConfig)
         : new Map(),
       mcpServers: options.mirroredMcpServers ?? new Set(),
-      mcpServerRoot: options.mirroredMcpServerRoot ?? false
+      mcpServerRoot: options.mirroredMcpServerRoot ?? false,
+      multilineSettings: readMultilinePromotedSettingTexts(runtimeConfig)
     })
     return true
   } catch (error) {
@@ -189,7 +189,13 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
       conflicts,
       runtimeValuesToPreserve
     })
-    settingsEdited = updates.size > 0 || hasTrackedSettingEdits(baseline, runtimeValues)
+    settingsEdited =
+      updates.size > 0 ||
+      hasTrackedSettingEdits(
+        baseline,
+        runtimeValues,
+        readMultilinePromotedSettingTexts(runtimeTomlObservation.value)
+      )
   }
   // Registrations can promote before the first mirror because untracked tables are additions;
   // a removed last registration still needs the guest check below.

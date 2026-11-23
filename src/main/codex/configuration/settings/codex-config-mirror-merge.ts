@@ -101,9 +101,19 @@ export function applySystemProjectRevocations(runtimeConfig: string, systemConfi
     return runtimeConfig
   }
   const lines = runtimeConfig.split('\n')
-  const inserted = new Set<string>()
+  const runtimeSections = getTomlSections(runtimeConfig)
+  // An alias already marked untrusted carries the revocation; the trusted spellings just go.
+  const inserted = new Set(
+    runtimeSections
+      .filter(
+        (section) =>
+          isRuntimeProjectTomlSection(section) &&
+          getProjectTrustLevel(section.block) === 'untrusted'
+      )
+      .map((section) => getRevocationTomlSectionHeaderKey(section))
+  )
   // Bottom-up so earlier section start lines stay valid after each splice.
-  for (const section of getTomlSections(runtimeConfig).toReversed()) {
+  for (const section of runtimeSections.toReversed()) {
     const revocation = revocations.get(getRevocationTomlSectionHeaderKey(section))
     if (
       revocation === undefined ||

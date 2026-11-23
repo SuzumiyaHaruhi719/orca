@@ -61,6 +61,28 @@ export function readPromotedSettingValuesFromContent(
   return result
 }
 
+/** Full source text of each promoted value that spans several lines, keyed like the scan. */
+export function readMultilinePromotedSettingTexts(config: string): Map<string, string> {
+  const lines = stripCodexDaemonOverride(config).split('\n')
+  const texts = new Map<string, string>()
+  for (const setting of scanStructuredSettingLines(lines)) {
+    if (!setting.multiline || !PROMOTED_STRUCTURED_KEYS.includes(setting.structuredKey)) {
+      continue
+    }
+    let state = createTomlLineScanState()
+    let end = setting.index
+    while (end < lines.length) {
+      state = updateTomlLineScanState(state, lines[end] ?? '')
+      end += 1
+      if (isTomlStructuralLine(state)) {
+        break
+      }
+    }
+    texts.set(setting.structuredKey, lines.slice(setting.index, end).join('\n').trimEnd())
+  }
+  return texts
+}
+
 type StructuredSettingLine = TopLevelSettingValue & { index: number; structuredKey: string }
 
 /** Scan preamble and first-level table assignments; ignore subtables, array tables and repeated bodies. */
