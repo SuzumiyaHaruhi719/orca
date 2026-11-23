@@ -12,7 +12,7 @@ import {
   PROMOTED_STRUCTURED_KEYS,
   readPromotedSettingValues,
   readPromotedSettingValuesFromContent,
-  readMultilinePromotedSettingTexts,
+  readMultilinePromotedSettingDigests,
   type TopLevelSettingValue
 } from '../toml/config-toml-promoted-setting-values'
 import {
@@ -78,7 +78,7 @@ export function snapshotCodexRuntimeSettingsBaseline(
         : new Map(),
       mcpServers: options.mirroredMcpServers ?? new Set(),
       mcpServerRoot: options.mirroredMcpServerRoot ?? false,
-      multilineSettings: readMultilinePromotedSettingTexts(runtimeConfig)
+      multilineSettings: readMultilinePromotedSettingDigests(runtimeConfig)
     })
     return true
   } catch (error) {
@@ -194,7 +194,7 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
       hasTrackedSettingEdits(
         baseline,
         runtimeValues,
-        readMultilinePromotedSettingTexts(runtimeTomlObservation.value)
+        readMultilinePromotedSettingDigests(runtimeTomlObservation.value)
       )
   }
   // Registrations can promote before the first mirror because untracked tables are additions;

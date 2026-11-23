@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { observeAgentStateFile } from '../codex-path-observation'
 import {
   createTomlLineScanState,
@@ -61,8 +62,8 @@ export function readPromotedSettingValuesFromContent(
   return result
 }
 
-/** Full source text of each promoted value that spans several lines, keyed like the scan. */
-export function readMultilinePromotedSettingTexts(config: string): Map<string, string> {
+/** A digest of each promoted value that spans several lines, keyed like the scan; bounded in size. */
+export function readMultilinePromotedSettingDigests(config: string): Map<string, string> {
   const lines = stripCodexDaemonOverride(config).split('\n')
   const texts = new Map<string, string>()
   for (const setting of scanStructuredSettingLines(lines)) {
@@ -78,7 +79,12 @@ export function readMultilinePromotedSettingTexts(config: string): Map<string, s
         break
       }
     }
-    texts.set(setting.structuredKey, lines.slice(setting.index, end).join('\n').trimEnd())
+    texts.set(
+      setting.structuredKey,
+      createHash('sha256')
+        .update(lines.slice(setting.index, end).join('\n').trimEnd())
+        .digest('hex')
+    )
   }
   return texts
 }

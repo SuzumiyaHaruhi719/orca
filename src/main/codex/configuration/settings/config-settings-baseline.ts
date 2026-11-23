@@ -22,7 +22,7 @@ export type CodexSettingsBaseline = {
   mcpServerRoot: boolean
   /** The managed config holds user edits that cannot be written back, so the mirror leaves it alone. */
   forked?: boolean
-  /** Full text of promoted values that were multiline when mirrored; `settings` tracks single lines only. */
+  /** Digests of promoted values that were multiline when mirrored; `settings` tracks single lines only. */
   multilineSettings?: ReadonlyMap<string, string>
 }
 

@@ -43,7 +43,7 @@ export function forkOnUserEdits(check: GuestForkCheck): CodexSettingsPromotionPl
 export function hasTrackedSettingEdits(
   baseline: CodexSettingsBaseline,
   runtimeValues: ReadonlyMap<string, TopLevelSettingValue>,
-  runtimeMultilineTexts: ReadonlyMap<string, string>
+  runtimeMultilineDigests: ReadonlyMap<string, string>
 ): boolean {
   for (const [key, mirroredRaw] of baseline.settings) {
     // The baseline's single-line values never match a multiline one, so that is an edit too.
@@ -51,8 +51,8 @@ export function hasTrackedSettingEdits(
       return true
     }
   }
-  for (const [key, mirroredText] of baseline.multilineSettings ?? []) {
-    if (!baseline.conflicts.has(key) && runtimeMultilineTexts.get(key) !== mirroredText) {
+  for (const [key, mirroredDigest] of baseline.multilineSettings ?? []) {
+    if (!baseline.conflicts.has(key) && runtimeMultilineDigests.get(key) !== mirroredDigest) {
       return true
     }
   }
