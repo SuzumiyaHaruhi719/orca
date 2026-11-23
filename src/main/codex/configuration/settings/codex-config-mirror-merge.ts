@@ -1,4 +1,3 @@
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { readMcpServerTomlOwnership } from '../toml/config-toml-mcp-servers'
 import {
   deduplicateProjectTomlSections,
@@ -101,9 +100,8 @@ export function applySystemProjectRevocations(runtimeConfig: string, systemConfi
   if (revocations.size === 0) {
     return runtimeConfig
   }
-  const expanded = expandInlineProjectTrust(runtimeConfig)
-  const lines = expanded.split('\n')
-  const runtimeSections = getTomlSections(expanded)
+  const lines = runtimeConfig.split('\n')
+  const runtimeSections = getTomlSections(runtimeConfig)
   // An alias already marked untrusted carries the revocation; the trusted spellings just go.
   const inserted = new Set(
     runtimeSections
@@ -131,28 +129,5 @@ export function applySystemProjectRevocations(runtimeConfig: string, systemConfi
     inserted.add(revocationKey)
     lines.splice(section.start, section.block.split('\n').length, ...replacement)
   }
-  const revoked = lines.join('\n')
-  // Keep the user's inline spelling when no revocation applied to it.
-  return revoked === expanded ? runtimeConfig : revoked
-}
-
-/** An inline `projects = {...}` map can't take a revocation in place, so it becomes tables. */
-function expandInlineProjectTrust(config: string): string {
-  const lines = config.split('\n')
-  const firstHeader = getTomlSections(config)[0]?.start ?? lines.length
-  const index = lines.slice(0, firstHeader).findIndex((line) => /^\s*projects\s*=\s*\{/.test(line))
-  if (index === -1) {
-    return config
-  }
-  let projects: unknown
-  try {
-    projects = parseToml(lines[index] ?? '').projects
-  } catch {
-    return config
-  }
-  if (!projects || typeof projects !== 'object' || Array.isArray(projects)) {
-    return config
-  }
-  lines.splice(index, 1)
-  return joinTomlBlocks([lines.join('\n'), stringifyToml({ projects })])
+  return lines.join('\n')
 }
