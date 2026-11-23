@@ -12,6 +12,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import type * as Os from 'node:os'
 import { join } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import type * as WslPaths from '../../../../shared/file-access/wsl-paths'
 
 const { homedirMock, forkTestState } = vi.hoisted(() => {
@@ -170,6 +171,23 @@ describe('managed Codex config for a WSL guest config', () => {
     expect(readRuntimeConfig()).toContain('trust_level = "untrusted"')
     expect(readRuntimeConfig()).not.toContain('trust_level = "trusted"')
     expect(readRuntimeConfig()).toContain('model = "o4"')
+  })
+
+  it('applies a distro revocation to trust the edited copy inherited inline', () => {
+    writeSystemConfig(
+      'model = "gpt-5"\nprojects = { "/home/u/repo" = { trust_level = "trusted" } }\n'
+    )
+    forkTestState.wslPath = systemConfigPath()
+    syncSystemConfigIntoManagedCodexHome()
+    simulateCodexSettingWrite('model', '"o4"')
+    syncSystemConfigIntoManagedCodexHome()
+
+    writeSystemConfig('model = "gpt-5"\n\n[projects."/home/u/repo"]\ntrust_level = "untrusted"\n')
+    syncSystemConfigIntoManagedCodexHome()
+
+    const managed = parseToml(readRuntimeConfig())
+    expect(managed.model).toBe('o4')
+    expect(managed.projects).toEqual({ '/home/u/repo': { trust_level: 'untrusted' } })
   })
 
   it.skipIf(process.platform === 'win32')(
