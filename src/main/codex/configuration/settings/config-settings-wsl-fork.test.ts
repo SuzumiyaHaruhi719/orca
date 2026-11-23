@@ -129,6 +129,34 @@ describe('managed Codex config for a WSL guest config', () => {
     expect(readRuntimeConfig()).toMatch(/^daemon_auto_start = false # orca:/m)
   })
 
+  it('keeps a managed change when the distro also changed that setting', () => {
+    writeSystemConfig('model = "gpt-5"\n')
+    forkTestState.wslPath = systemConfigPath()
+    syncSystemConfigIntoManagedCodexHome()
+    simulateCodexSettingWrite('model', '"o4"')
+    writeSystemConfig('model = "o5"\n')
+
+    syncSystemConfigIntoManagedCodexHome()
+
+    expect(readRuntimeConfig()).toContain('model = "o4"')
+  })
+
+  it('still applies a distro project revocation to an edited managed copy', () => {
+    const trusted = '[projects."/home/u/repo"]\ntrust_level = "trusted"\n'
+    writeSystemConfig(`model = "gpt-5"\n\n${trusted}`)
+    forkTestState.wslPath = systemConfigPath()
+    syncSystemConfigIntoManagedCodexHome()
+    simulateCodexSettingWrite('model', '"o4"')
+    syncSystemConfigIntoManagedCodexHome()
+
+    writeSystemConfig(`model = "gpt-5"\n\n${trusted.replace('"trusted"', '"untrusted"')}`)
+    syncSystemConfigIntoManagedCodexHome()
+
+    expect(readRuntimeConfig()).toContain('trust_level = "untrusted"')
+    expect(readRuntimeConfig()).not.toContain('trust_level = "trusted"')
+    expect(readRuntimeConfig()).toContain('model = "o4"')
+  })
+
   it.skipIf(process.platform === 'win32')(
     'never creates a config in a WSL guest through a linked ~/.codex folder',
     () => {

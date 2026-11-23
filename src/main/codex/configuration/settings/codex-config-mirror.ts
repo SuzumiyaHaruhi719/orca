@@ -1,10 +1,7 @@
 import { readMcpServerTomlOwnership } from '../toml/config-toml-mcp-servers'
 import { join } from 'node:path'
 import { observeAgentStateFile } from '../codex-path-observation'
-import {
-  recoverInterruptedGuardedFileOperation,
-  writeFileAtomicallyIfUnchanged
-} from '../../../filesystem/atomic-file-publication'
+import { writeFileAtomicallyIfUnchanged } from '../../../filesystem/atomic-file-publication'
 import { getOrcaManagedCodexHomePath, getSystemCodexHomePath } from '../homes/codex-home-paths'
 import {
   promoteCodexRuntimeSettingsToSystem,
@@ -12,7 +9,7 @@ import {
   type CodexSettingsPromotionHomes,
   type CodexSettingsPromotionPlan
 } from './config-settings-promotion'
-import { observeCodexSettingsBaseline, readCodexSettingsBaseline } from './config-settings-baseline'
+import { readCodexSettingsBaseline } from './config-settings-baseline'
 import { getCodexConfigSyncStatus, reportCodexConfigSyncOutcome } from './config-sync-stall'
 import { preserveRuntimeConflictValues } from './codex-config-settings-preservation'
 import {
@@ -26,7 +23,10 @@ import {
   prepareSystemConfigForRuntimeMirror,
   resolveCodexConfigMirrorSourceDirectory
 } from './codex-config-mirror-source'
-import { mergeSystemCodexConfigIntoRuntime } from './codex-config-mirror-merge'
+import {
+  applySystemProjectRevocations,
+  mergeSystemCodexConfigIntoRuntime
+} from './codex-config-mirror-merge'
 
 // Mirrored MCP environment tokens require owner-only writes.
 const RUNTIME_CONFIG_WRITE = { mode: 0o600 } as const
@@ -61,8 +61,7 @@ function mirrorSystemConfigIntoManagedCodexHome(homes: CodexSettingsPromotionHom
     return { ran: false, complete: false }
   }
   if (promotionPlan.forked) {
-    // Only Orca's own lines are refreshed (by the caller's daemon guard); the user owns the rest.
-    return { ran: false, complete: true }
+    return { ran: refreshForkedManagedConfig(homes), complete: true }
   }
   let mirrorResult: CodexConfigMirrorResult
   try {
@@ -120,8 +119,34 @@ export function ensureCodexDaemonSocketGuard(runtimeHomePath: string): void {
   }
 }
 
-function writeCodexDaemonSocketGuard(runtimeHomePath: string, runtimeConfig: string | null): void {
-  const guarded = applyRuntimeOwnedConfig(runtimeConfig ?? '', runtimeHomePath, runtimeConfig)
+/** The user owns a forked copy: only Orca's own lines and source project revocations change it. */
+function refreshForkedManagedConfig(homes: CodexSettingsPromotionHomes): boolean {
+  try {
+    const runtime = observeAgentStateFile(join(homes.runtimeHomePath, 'config.toml'))
+    const system = observeAgentStateFile(join(homes.systemHomePath, 'config.toml'))
+    if (runtime.kind !== 'present' || system.kind === 'indeterminate') {
+      return false
+    }
+    writeCodexDaemonSocketGuard(
+      homes.runtimeHomePath,
+      runtime.value,
+      system.kind === 'present'
+        ? applySystemProjectRevocations(runtime.value, system.value)
+        : runtime.value
+    )
+    return true
+  } catch (error) {
+    console.warn('[codex-config] Failed to refresh a forked managed Codex config:', error)
+    return false
+  }
+}
+
+function writeCodexDaemonSocketGuard(
+  runtimeHomePath: string,
+  runtimeConfig: string | null,
+  baseConfig = runtimeConfig ?? ''
+): void {
+  const guarded = applyRuntimeOwnedConfig(baseConfig, runtimeHomePath, runtimeConfig)
   if (guarded !== (runtimeConfig ?? '')) {
     writeFileAtomicallyIfUnchanged(
       join(runtimeHomePath, 'config.toml'),
@@ -130,86 +155,6 @@ function writeCodexDaemonSocketGuard(runtimeHomePath: string, runtimeConfig: str
       RUNTIME_CONFIG_WRITE
     )
   }
-}
-
-/** One-way refresh for retained PTYs; promoting stale settings from this retired home could overwrite live config. */
-export function syncSystemConfigIntoLegacySharedCodexHome(
-  homes: CodexSettingsPromotionHomes = {
-    runtimeHomePath: getOrcaManagedCodexHomePath(),
-    systemHomePath: getSystemCodexHomePath()
-  }
-): void {
-  const systemConfigPath = join(homes.systemHomePath, 'config.toml')
-  const runtimeConfigPath = join(homes.runtimeHomePath, 'config.toml')
-  recoverInterruptedGuardedFileOperation(runtimeConfigPath)
-  const systemConfigObservation = observeAgentStateFile(systemConfigPath)
-  if (systemConfigObservation.kind === 'indeterminate') {
-    throw systemConfigObservation.error
-  }
-  const rawSystemConfig =
-    systemConfigObservation.kind === 'present' ? systemConfigObservation.value : ''
-  const runtimeConfigObservation = observeAgentStateFile(runtimeConfigPath)
-  if (runtimeConfigObservation.kind === 'indeterminate') {
-    throw runtimeConfigObservation.error
-  }
-  const runtimeConfigBeforeMirror =
-    runtimeConfigObservation.kind === 'present' ? runtimeConfigObservation.value : null
-  const daemonGuarded = codexDaemonSocketPathExceedsLimit(homes.runtimeHomePath)
-  // A missing cloud-synced source does not prove the user cleared config.
-  let mirroredRuntimeConfig = runtimeConfigBeforeMirror ?? ''
-  if (rawSystemConfig.trim() !== '') {
-    const sourceConfigDir = resolveCodexConfigMirrorSourceDirectory(homes.systemHomePath)
-    mirroredRuntimeConfig =
-      runtimeConfigBeforeMirror !== null
-        ? mergeSystemCodexConfigIntoRuntime(
-            runtimeConfigBeforeMirror,
-            guardSystemConfigForRuntimeMerge(
-              prepareSystemConfigForRuntimeMirror(
-                rawSystemConfig,
-                sourceConfigDir,
-                homes.runtimeHomePath
-              ),
-              homes.runtimeHomePath,
-              daemonGuarded
-            ),
-            sourceConfigDir,
-            ...readLegacySharedHomeMcpOwnership(homes.runtimeHomePath)
-          )
-        : prepareSystemConfigForFreshRuntimeMirror(
-            rawSystemConfig,
-            sourceConfigDir,
-            homes.runtimeHomePath
-          )
-  }
-  const nextRuntimeConfig = applyMeasuredRuntimeOwnedConfig(
-    mirroredRuntimeConfig,
-    homes.runtimeHomePath,
-    runtimeConfigBeforeMirror,
-    daemonGuarded
-  )
-  if ((runtimeConfigBeforeMirror ?? '') === nextRuntimeConfig) {
-    return
-  }
-  // Compare before replacement so concurrent trust writes from retained Codex processes win.
-  writeFileAtomicallyIfUnchanged(
-    runtimeConfigPath,
-    runtimeConfigBeforeMirror,
-    nextRuntimeConfig,
-    RUNTIME_CONFIG_WRITE
-  )
-}
-
-// The last baseline identifies system-owned MCP servers; never advance it during this one-way refresh.
-function readLegacySharedHomeMcpOwnership(
-  runtimeHomePath: string
-): [mirroredMcpServerNames: ReadonlySet<string>, mirroredMcpServerRoot: boolean] {
-  const observation = observeCodexSettingsBaseline(runtimeHomePath)
-  if (observation.kind === 'indeterminate') {
-    throw new Error('Codex settings baseline could not be read')
-  }
-  return observation.kind === 'present'
-    ? [observation.baseline.mcpServers, observation.baseline.mcpServerRoot]
-    : [new Set(), true]
 }
 
 type CodexConfigMirrorResult =

@@ -2,7 +2,7 @@ import {
   getOrcaManagedCodexHomePath,
   getSystemCodexHomePath
 } from '../../../codex/configuration/homes/codex-home-paths'
-import { syncSystemConfigIntoLegacySharedCodexHome } from '../../../codex/configuration/settings/codex-config-mirror'
+import { syncSystemConfigIntoLegacySharedCodexHome } from '../../../codex/configuration/settings/codex-config-legacy-shared-home-refresh'
 
 type LegacySharedCodexConfigPaths = {
   sharedRuntimeHome: string

@@ -81,3 +81,38 @@ export function mergeSystemCodexConfigIntoRuntime(
       .map((section) => section.block)
   ])
 }
+
+/** A managed copy the user owns takes no source edits except explicit project revocations. */
+export function applySystemProjectRevocations(runtimeConfig: string, systemConfig: string): string {
+  const revocations = new Map<string, string>()
+  const regranted = new Set<string>()
+  for (const section of deduplicateProjectTomlSections(getTomlSections(systemConfig))) {
+    if (!isRuntimeProjectTomlSection(section)) {
+      continue
+    }
+    const level = getProjectTrustLevel(section.block)
+    if (level === 'untrusted') {
+      revocations.set(getRevocationTomlSectionHeaderKey(section), section.block)
+    } else if (level === 'trusted') {
+      regranted.add(getTomlSectionHeaderKey(section))
+    }
+  }
+  if (revocations.size === 0) {
+    return runtimeConfig
+  }
+  const lines = runtimeConfig.split('\n')
+  // Bottom-up so earlier section start lines stay valid after each splice.
+  for (const section of getTomlSections(runtimeConfig).toReversed()) {
+    const revocation = revocations.get(getRevocationTomlSectionHeaderKey(section))
+    if (
+      revocation === undefined ||
+      !isRuntimeProjectTomlSection(section) ||
+      getProjectTrustLevel(section.block) !== 'trusted' ||
+      regranted.has(getTomlSectionHeaderKey(section))
+    ) {
+      continue
+    }
+    lines.splice(section.start, section.block.split('\n').length, ...revocation.split('\n'))
+  }
+  return lines.join('\n')
+}

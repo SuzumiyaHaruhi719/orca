@@ -289,14 +289,15 @@
 2 src/main/codex/configuration/homes/codex-runtime-home-launch-preparation.ts # +1: the deferred config mirror now runs here from data (it was a closure built in runtime-home-service-*); main runs it only when the trust worker did not
 1 src/main/codex/configuration/homes/codex-stale-pane-accounts.ts
 9 src/main/codex/configuration/homes/codex-windows-sandbox-read-grant.ts
+6 src/main/codex/configuration/settings/codex-config-legacy-shared-home-refresh.ts # moved from codex-config-mirror.ts with the retained-PTY refresh; no new calls (#45247)
 1 src/main/codex/configuration/settings/codex-config-mirror-merge.ts
 3 src/main/codex/configuration/settings/codex-config-mirror-source.ts # moved from codex-config-mirror.ts with the system-config preparation helpers; no new calls
-27 src/main/codex/configuration/settings/codex-config-mirror.ts
+23 src/main/codex/configuration/settings/codex-config-mirror.ts
 2 src/main/codex/configuration/settings/codex-config-path-reference-rewrite.ts
 1 src/main/codex/configuration/settings/codex-config-runtime-owned-values.ts
 3 src/main/codex/configuration/settings/config-settings-baseline.ts # writeFileAtomically replaces a direct writeFileSync (sync-fs count drops by 1): same one write per baseline change, now torn-write safe because the baseline holds the fork state (#45247)
 2 src/main/codex/configuration/settings/config-settings-promotion-write-target.ts # +1 resolveThroughLinkedAncestor: realpathSync of the nearest existing folder, only when config.toml is absent or unresolvable, so a host ~/.codex linked into a WSL guest is never written (#45247)
-9 src/main/codex/configuration/settings/config-settings-promotion.ts # +1 writeCodexSettingsBaseline: one-shot per managed home, when a WSL guest's config would need a write-back and the managed copy forks instead (#45247)
+10 src/main/codex/configuration/settings/config-settings-promotion.ts # +1 writeCodexSettingsBaseline: one-shot per managed home when a WSL guest's managed copy forks; +1 recoverInterruptedGuardedFileOperation: only when the managed config.toml is absent (#45247)
 1 src/main/codex/configuration/settings/config-sync-stall.ts
 1 src/main/codex/configuration/shared-server/codex-daemon-socket-path-guard.ts
 1 src/main/codex/configuration/shared-server/codex-shared-server-fix.ts
