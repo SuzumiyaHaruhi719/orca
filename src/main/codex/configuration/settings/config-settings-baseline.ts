@@ -1,11 +1,9 @@
-import { writeFileSync } from 'node:fs'
 import { isDefinitiveAbsence } from '../../../../shared/errors/definitive-filesystem-absence'
 import { JsonTextStructureCapacityError } from '../../../../shared/json-stream/json-text-structure-limit'
 import { NodeFileReadTooLargeError } from '../../../../shared/file-content/node-bounded-file-reader'
 import { join } from 'node:path'
 import { readAgentStateFileSync, readAgentStateJsonFileSync } from '../agent-state-file-reader'
-import { observeFilePublication } from '../../../filesystem/file-content-observation'
-import { assertGuardedFileCurrent } from '../../../filesystem/concurrent-file-edit-guard'
+import { writeFileAtomically } from '../../../filesystem/atomic-file-publication'
 
 const SETTINGS_BASELINE_FILE = '.orca-config-settings-baseline.json'
 
@@ -22,6 +20,8 @@ export type CodexSettingsBaseline = {
   /** MCP server names the last mirror copied from the canonical source. */
   mcpServers: ReadonlySet<string>
   mcpServerRoot: boolean
+  /** The managed config holds user edits that cannot be written back, so the mirror leaves it alone. */
+  forked?: boolean
 }
 
 type StoredSettingsBaseline = {
@@ -31,6 +31,7 @@ type StoredSettingsBaseline = {
   registrations?: Record<string, Record<string, string>>
   mcpServers?: string[]
   mcpServerRoot?: boolean
+  forked?: boolean
 }
 
 /** Unreadable baselines stall the mirror; absent or invalid baselines can be rebuilt. */
@@ -85,7 +86,8 @@ function readParsedCodexSettingsBaseline(
       registrations: readStoredRegistrations(parsed.registrations),
       mcpServers: readStoredMcpServers(parsed.mcpServers),
       // Older mirrors owned the whole MCP root; retain that removal policy for one pass.
-      mcpServerRoot: parsed.mcpServers === undefined || parsed.mcpServerRoot === true
+      mcpServerRoot: parsed.mcpServers === undefined || parsed.mcpServerRoot === true,
+      forked: parsed.forked === true
     }
   } catch (error) {
     return isDefinitiveAbsence(error) || isRebuildableBaselineError(error) ? null : 'unreadable'
@@ -145,6 +147,9 @@ export function writeCodexSettingsBaseline(
   if (baseline.mcpServerRoot) {
     file.mcpServerRoot = true
   }
+  if (baseline.forked) {
+    file.forked = true
+  }
   const baselinePath = getCodexSettingsBaselinePath(runtimeHomePath)
   const serialized = `${JSON.stringify(file, null, 2)}\n`
   let existing: string | null = null
@@ -160,9 +165,8 @@ export function writeCodexSettingsBaseline(
   if (existing === serialized) {
     return
   }
-  assertGuardedFileCurrent(baselinePath)
-  writeFileSync(baselinePath, serialized, { encoding: 'utf-8', mode: 0o600 })
-  observeFilePublication(baselinePath, serialized)
+  // Atomic: a torn file reads as absent, which would drop the fork and mirror over user edits.
+  writeFileAtomically(baselinePath, serialized, { mode: 0o600 })
 }
 
 export function getCodexSettingsBaselinePath(runtimeHomePath: string): string {

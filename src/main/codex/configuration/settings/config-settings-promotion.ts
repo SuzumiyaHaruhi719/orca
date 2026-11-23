@@ -1,12 +1,8 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { observeAgentStateFile } from '../codex-path-observation'
 import { resolvePromotionWriteTarget } from './config-settings-promotion-write-target'
-import { observeFilePublication } from '../../../filesystem/file-content-observation'
-import {
-  assertGuardedFileCurrent,
-  ConcurrentFileEditError
-} from '../../../filesystem/concurrent-file-edit-guard'
+import { ConcurrentFileEditError } from '../../../filesystem/concurrent-file-edit-guard'
 import { writeTomlConfigAtomically } from '../toml/config-toml-atomic-write'
 import { parseWslUncPath } from '../../../../shared/file-access/wsl-paths'
 import { getOrcaManagedCodexHomePath, getSystemCodexHomePath } from '../homes/codex-home-paths'
@@ -93,6 +89,8 @@ export type CodexSettingsPromotionPlan = {
   /** MCP names the previous mirror copied from the canonical source. */
   mirroredMcpServers: ReadonlySet<string>
   mirroredMcpServerRoot: boolean
+  /** The managed copy holds user edits Orca may not write back, so the mirror leaves them alone. */
+  forked?: boolean
 }
 
 function getHostPromotionHomes(): CodexSettingsPromotionHomes {
@@ -149,6 +147,9 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
     throw new Error('Codex settings baseline could not be read')
   }
   const baseline = baselineObservation.kind === 'present' ? baselineObservation.baseline : null
+  if (baseline?.forked) {
+    return { ...emptyPromotionPlan(), forked: true }
+  }
   const mirroredMcpServers = baseline?.mcpServers ?? new Set<string>()
   const mirroredMcpServerRoot = baseline?.mcpServerRoot ?? false
   const updates = new Map<string, string>()
@@ -168,11 +169,18 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
   if (updates.size === 0 && !hasCodexRegistrationEntries(runtimeTomlObservation.value)) {
     return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
   }
-  // A new home may later hold auth.json, so create it owner-only.
-  mkdirSync(systemHomePath, { recursive: true, mode: 0o700 })
+  // Orca never writes a WSL guest's own config, including through a host dotfile link into one.
+  const guestSystemConfig = parseWslUncPath(systemTomlPath) !== null
+  if (!guestSystemConfig) {
+    // A new home may later hold auth.json, so create it owner-only.
+    mkdirSync(systemHomePath, { recursive: true, mode: 0o700 })
+  }
   const writeTarget = resolvePromotionWriteTarget(systemTomlPath)
-  // Dangling dotfile links may target a parent directory that does not exist yet.
-  mkdirSync(dirname(writeTarget.path), { recursive: true, mode: 0o700 })
+  const writesIntoGuest = guestSystemConfig || parseWslUncPath(writeTarget.path) !== null
+  if (!writesIntoGuest) {
+    // Dangling dotfile links may target a parent directory that does not exist yet.
+    mkdirSync(dirname(writeTarget.path), { recursive: true, mode: 0o700 })
+  }
   // Read the target before reconstructing it; registration promotion can run without a baseline.
   const writeTargetObservation = observeAgentStateFile(writeTarget.path)
   if (writeTargetObservation.kind === 'indeterminate') {
@@ -197,21 +205,19 @@ function promoteCodexRuntimeSettingsToSystemUnsafe(
   if (nextContent === systemContent) {
     return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
   }
-  const computedFrom = targetExists ? writeTargetObservation.value : null
-  if (targetExists && parseWslUncPath(writeTarget.path)) {
-    // WSL 9P symlink metadata is unreliable; write through to preserve the guest inode.
-    assertGuardedFileCurrent(writeTarget.path)
-    const current = observeAgentStateFile(writeTarget.path)
-    if (current.kind === 'indeterminate') {
-      throw current.error
-    }
-    if (current.kind !== 'present' || current.value !== computedFrom) {
-      return null
-    }
-    writeFileSync(writeTarget.path, nextContent, 'utf-8')
-    observeFilePublication(writeTarget.path, nextContent)
-    return { conflicts, runtimeValuesToPreserve, mirroredMcpServers, mirroredMcpServerRoot }
+  if (writesIntoGuest) {
+    // The managed copy now owns the user's edits; later source edits no longer flow into it.
+    writeCodexSettingsBaseline(runtimeHomePath, {
+      settings: new Map(),
+      conflicts: new Map(),
+      registrations: new Map(),
+      mcpServers: new Set(),
+      mcpServerRoot: false,
+      forked: true
+    })
+    return { ...emptyPromotionPlan(), forked: true }
   }
+  const computedFrom = targetExists ? writeTargetObservation.value : null
   // Promotion never rotated the user's config.toml.bak; keep it that way.
   if (!writeTomlConfigAtomically(writeTarget.path, nextContent, computedFrom, { backup: false })) {
     return null

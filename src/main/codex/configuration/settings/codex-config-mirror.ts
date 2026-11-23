@@ -60,6 +60,10 @@ function mirrorSystemConfigIntoManagedCodexHome(homes: CodexSettingsPromotionHom
     }
     return { ran: false, complete: false }
   }
+  if (promotionPlan.forked) {
+    // Only Orca's own lines are refreshed (by the caller's daemon guard); the user owns the rest.
+    return { ran: false, complete: true }
+  }
   let mirrorResult: CodexConfigMirrorResult
   try {
     mirrorResult = syncSystemConfigIntoManagedCodexHomeUnsafe(homes, promotionPlan)
